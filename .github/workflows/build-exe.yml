@@ -1,3 +1,4 @@
+
 name: Build DXF Analyzer EXE
 
 on:
@@ -27,7 +28,7 @@ jobs:
         pyinstaller --onefile dxf_analyzer.py
 
     - name: Upload EXE
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: DXF_ANALYZER_EXE
         path: dist/dxf_analyzer.exe
