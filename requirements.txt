@@ -1,0 +1,5 @@
+ezdxf
+shapely
+pandas
+numpy
+openpyxl
