@@ -2,70 +2,56 @@ import ezdxf
 import os
 import math
 import pandas as pd
-import numpy as np
 from shapely.geometry import Polygon
 from tkinter import Tk, filedialog, messagebox
 
 
-# ---------- Geometry helpers ----------
+def entity_to_polygon(entity):
+    try:
+        if entity.dxftype() == "LWPOLYLINE" and entity.closed:
+            return Polygon(entity.get_points("xy"))
 
-def circle_to_polygon(center, radius, segments=180):
-    return Polygon([
-        (
-            center[0] + radius * math.cos(2 * math.pi * i / segments),
-            center[1] + radius * math.sin(2 * math.pi * i / segments)
-        )
-        for i in range(segments)
-    ])
+        if entity.dxftype() == "CIRCLE":
+            center = entity.dxf.center
+            r = entity.dxf.radius
+            points = [
+                (
+                    center.x + r * math.cos(a),
+                    center.y + r * math.sin(a)
+                )
+                for a in [i * 2 * math.pi / 180 for i in range(180)]
+            ]
+            return Polygon(points)
 
+        if entity.dxftype() == "ARC":
+            if abs(entity.dxf.end_angle - entity.dxf.start_angle) >= 360:
+                center = entity.dxf.center
+                r = entity.dxf.radius
+                points = [
+                    (
+                        center.x + r * math.cos(a),
+                        center.y + r * math.sin(a)
+                    )
+                    for a in [i * 2 * math.pi / 180 for i in range(180)]
+                ]
+                return Polygon(points)
 
-def arc_to_points(arc, segments=90):
-    start = math.radians(arc.start_angle)
-    end = math.radians(arc.end_angle)
-
-    if end < start:
-        end += 2 * math.pi
-
-    angles = np.linspace(start, end, segments)
-
-    return [
-        (
-            arc.center[0] + arc.radius * math.cos(a),
-            arc.center[1] + arc.radius * math.sin(a)
-        )
-        for a in angles
-    ]
-
-
-# ---------- Entity → Polygon ----------
-
-def polygon_from_entity(entity):
-    t = entity.dxftype()
-
-    if t == "LWPOLYLINE" and entity.closed:
-        return Polygon(entity.get_points("xy"))
-
-    if t == "POLYLINE" and entity.is_closed:
-        return Polygon([p[:2] for p in entity.points()])
-
-    if t == "CIRCLE":
-        return circle_to_polygon(entity.center, entity.radius)
-
-    if t == "ARC":
-        pts = arc_to_points(entity)
-        if len(pts) > 2:
-            return Polygon(pts)
+    except:
+        return None
 
     return None
 
 
-# ---------- Calculations ----------
+def circumscribed_circle_diameter(polygons):
+    all_points = []
+    for poly in polygons:
+        all_points.extend(list(poly.exterior.coords))
 
-def circumscribed_circle_diameter(polygon):
-    coords = np.array(polygon.exterior.coords)
-    center = coords.mean(axis=0)
-    radius = max(np.linalg.norm(p - center) for p in coords)
-    return 2 * radius
+    cx = sum(p[0] for p in all_points) / len(all_points)
+    cy = sum(p[1] for p in all_points) / len(all_points)
+
+    max_r = max(math.dist((cx, cy), p) for p in all_points)
+    return 2 * max_r
 
 
 def analyze_dxf(file_path):
@@ -73,16 +59,14 @@ def analyze_dxf(file_path):
     msp = doc.modelspace()
 
     polygons = []
-
     for e in msp:
-        poly = polygon_from_entity(e)
+        poly = entity_to_polygon(e)
         if poly and poly.is_valid and poly.area > 0:
             polygons.append(poly)
 
     if not polygons:
-        raise ValueError("No valid closed geometry found")
+        raise Exception("No valid closed contours found")
 
-    # Largest area = outer contour
     polygons.sort(key=lambda p: p.area, reverse=True)
 
     outer = polygons[0]
@@ -90,18 +74,15 @@ def analyze_dxf(file_path):
 
     net_area = outer.area - sum(p.area for p in inners)
     chambers = len(inners)
-    circ_dia = circumscribed_circle_diameter(outer)
+    circle_dia = circumscribed_circle_diameter(polygons)
 
-    return net_area, circ_dia, chambers
+    return round(net_area, 3), round(circle_dia, 3), chambers
 
-
-# ---------- Main ----------
 
 def main():
-    root = Tk()
-    root.withdraw()
-
+    Tk().withdraw()
     folder = filedialog.askdirectory(title="Select DXF Folder")
+
     if not folder:
         return
 
@@ -112,28 +93,25 @@ def main():
             path = os.path.join(folder, file)
             try:
                 area, dia, chambers = analyze_dxf(path)
-                results.append([
-                    file,
-                    round(area, 3),
-                    round(dia, 3),
-                    chambers,
-                    "OK"
-                ])
-            except Exception:
+                results.append([file, area, dia, chambers, "OK"])
+            except Exception as e:
                 results.append([file, "", "", "", "Error"])
 
-    df = pd.DataFrame(results, columns=[
-        "File Name",
-        "Cross Section Area (mm2)",
-        "Circumscribed Circle Diameter (mm)",
-        "Chambers",
-        "Status"
-    ])
+    df = pd.DataFrame(
+        results,
+        columns=[
+            "File Name",
+            "Cross Section Area (mm2)",
+            "Circumscribed Circle Diameter (mm)",
+            "Chambers",
+            "Status",
+        ],
+    )
 
-    output_path = os.path.join(folder, "DXF_Analysis_Output.xlsx")
-    df.to_excel(output_path, index=False)
+    output = os.path.join(folder, "DXF_Analysis_Output.xlsx")
+    df.to_excel(output, index=False)
 
-    messagebox.showinfo("Done", "Excel file generated successfully!")
+    messagebox.showinfo("Done", "DXF Analysis Completed Successfully!")
 
 
 if __name__ == "__main__":
